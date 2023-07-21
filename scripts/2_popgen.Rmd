@@ -1,0 +1,865 @@
+---
+title: "2_CVSH: Pop gen"
+output: html_notebook
+---
+
+# Preparing for Pop Gen Analyses
+
+There are a lot of experimental fish from CH to NH in here, as well as fish that strayed from MRH to NH and they should be pulled out before pop gen analyses. These fish weren't actually used as broodstock and will skew results. They will drop out of the pedigree analyses, but not out of analyses using genotypes without PBT. Additionally, some steelhead at MRH were "heldover" at the hatchery to compensate for lower numbers in dry years. These fish should be flagged as well.
+
+Adults that return to CV hatcheries are not necessarily spawned, especially in instances where fish are very visually distinct from typical hatchery broodstock and can confidently be tossed as strays from other programs. Hayley first identified the 2017 straying event of 2 yo steelhead from MRH straying to NH, so we know we will want to remove these as well from the population genetics analyses. We will also flag trios with kids spawning at different hatcheries than their parents.
+
+Should not be included as broodstock in pop gen:
+
+* dead in tank
+* eggs thrown out
+* NIMBUS SPAWN
+* CFH OR NIMBUS UNKNOWN; NIMBUS FISH STARTED DAY
+* COLEMAN/NIMBUS EXPERIMENTAL STEELHEAD
+* POSSIBLE RESIDENT FISH, NOT USED AS BROODSTOCK
+* MORT
+
+
+### Installing strataG
+
+first: download 2.4.905 tar.gz from here: https://cran.r-project.org/src/contrib/Archive/strataG/
+
+and also rmetasim v.3.1.7 (.tgz OS X El Capitan binaries) from here:
+http://cran.nexr.com/web/packages/rmetasim/index.html
+
+Skipping the rmetasim step will throw errors from the C++ compiler (error: use of undeclared identifier 'random_shuffle') 
+
+
+install these packages:
+install.packages(c("ape","apex","adegenet", "copula", "DT", "genepop", "Hmisc","pegas", "phangorn", "rmetasim", "swfscMisc"))
+
+then go to Tools>Install Packages...> click for .tar.gz files, then install rmetasim, then strataG
+
+
+Infile format requirements for _strataG_:
+
+* Two-column format (two columns per locus)
+* Missing data should be coded as NA
+* Indiv ID column and header row are acceptable
+* Locus names should have same root & not be duplicated, e.g., Omy_AldA and Omy_AldA_1
+
+
+```{r}
+library(strataG)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# metadata and genotypes
+pop_met <- read_rds("../metadata/cvsh_meta.rds")
+pop_genos <- read_rds("../metadata/cvsh_geno.rds")
+
+# format pop_gen to wide column format
+pop_gen1 <- pop_genos %>% 
+  mutate(locus = case_when(
+    gene_copy == 1 ~ paste(locus),
+    gene_copy ==2 ~ paste(locus, "_1", sep="")
+  )) %>% 
+  select(-gene_copy) %>% 
+  pivot_wider(names_from = locus, values_from = allele_int)
+
+# bind year and hatchery from metadata
+pop_gen2 <- left_join(pop_met %>% select(indiv, spawner_group, sex, year, hatchery), pop_gen1, by = "indiv")
+
+```
+
+
+
+### Adding broodstock column to cvsh
+
+
+Use sample comments in metadata to flag/remove the following:
+
+* dead in tank
+* eggs thrown out
+* NIMBUS SPAWN
+* CFH OR NIMBUS UNKNOWN; NIMBUS FISH STARTED DAY
+* COLEMAN/NIMBUS EXPERIMENTAL STEELHEAD
+* POSSIBLE RESIDENT FISH, NOT USED AS BROODSTOCK
+* MORT
+
+```{r}
+brood_meta <- pop_met %>% 
+  mutate(broodstock = case_when(
+    grepl("DEAD", SAMPLE_COMMENTS) ~ "no",
+    grepl("THROWN", SAMPLE_COMMENTS) ~ "no",
+    grepl("MORT", SAMPLE_COMMENTS) ~ "no",
+    grepl("NIMBUS SPAWN", SAMPLE_COMMENTS) ~ "no",
+    grepl("CFH OR NIMBUS UNKNOWN;", SAMPLE_COMMENTS) ~ "no",
+    grepl("EXPERIMENTAL", SAMPLE_COMMENTS) ~ "no",
+    grepl("RESIDENT", SAMPLE_COMMENTS) ~ "no",
+   TRUE ~ "yes"), .after=hatchery) %>% 
+  filter(broodstock == "yes") 
+
+all_pop <- pop_gen2 %>% 
+  filter(indiv %in% brood_meta$indiv)
+  
+```
+
+
+After decline in returns during drought, management at MRH "heldover" steelhead at the hatchery without releasing after spawning. These fish have holdover included in sample comments, so good to make a list of ids for reference.
+
+```{r}
+holdovers <- pop_met %>% 
+  mutate(holdover = case_when(
+    grepl("HOLD OVER", SAMPLE_COMMENTS) ~ "holdover",
+    !(grepl("HOLD OVER", SAMPLE_COMMENTS)) ~ "no"
+  )) %>% 
+  select(NMFS_DNA_ID, spawner_group:hatchery, SAMPLE_COMMENTS, holdover) %>% 
+  filter(holdover == "holdover") 
+
+write_rds(holdovers, "../metadata/holdovers.rds")
+```
+
+
+
+
+Next, use pedigree to create list of 2015 MRH > 2017 NH steelhead - know from hatcheries + H.N.'s analysis that these strays happened from MRH to NH. 
+
+We will run analyses with these strays both included or excluded.
+
+included in all_pop
+excluded in rem_pop
+
+```{r}
+
+# pedigree - for calculating age and for finding the 2015>2017 strays
+ped <- read_rds("../processed_data/CV_pedigree.rds") 
+
+# 165 strays
+mrh_nh_strays <- ped %>% 
+  separate_rows(kid_year, sep =",") %>% 
+  filter(SpawnYear == "2015" & kid_year == "2017" & ma_hatchery == "MRH" & kid_hatchery == "NH")
+write_rds(mrh_nh_strays, "../processed_data/MRH2015_NH2017_strays.rds")
+
+rem_pop <- all_pop %>% 
+  filter(!(indiv %in% mrh_nh_strays$kid)) 
+```
+
+
+# Creating pop gen datasets
+
+pop gen analyses:
+
+- expected (He) and observed (Ho) heterozygosity - on all samples
+- Fst (between programs across years; within program across years) - on all samples
+- STRUCTURE + PCA - subset of 300 from each program
+
+
+We will be comparing programs with other programs, between programs over study years, as well as within program over study years.
+
+
+## strays NOT removed:
+
+create groups by program - pop list datasets derived from this:
+```{r}
+gen_di_split <- all_pop %>% 
+  group_by(hatchery, year)
+group_name_df <- group_keys(gen_di_split) %>% 
+  mutate(group_name=str_c(as.character(hatchery),"_",year))
+group_name <- group_name_df$group_name %>% sort()
+```
+
+grouping by program and year
+```{r}
+genos_het <- gen_di_split %>% 
+  select(-sex,-spawner_group) %>% 
+  group_by(hatchery, year) %>% 
+  group_split(.keep = FALSE) %>% 
+  setNames(group_name)
+```
+
+grouping by program
+```{r}
+genos_pro <- gen_di_split %>% 
+  group_by(hatchery) %>% 
+  group_split() %>% 
+  setNames(c("CH", "FRH", "MRH", "NH"))
+```
+
+
+## strays REMOVED:
+
+create groups by program - pop list datasets derived from this:
+```{r}
+gen_di_splitr <- rem_pop %>% 
+  group_by(hatchery, year)
+group_name_dfr <- group_keys(gen_di_splitr) %>% 
+  mutate(group_name=str_c(as.character(hatchery),"_",year))
+group_namer <- group_name_dfr$group_name %>% sort()
+```
+
+grouping by program and year
+```{r}
+genos_hetr <- gen_di_splitr %>% 
+  select(-sex,-spawner_group) %>% 
+  group_by(hatchery, year) %>% 
+  group_split(.keep = FALSE) %>% 
+  setNames(group_namer)
+```
+
+grouping by program
+```{r}
+genos_pror <- gen_di_splitr %>% 
+  group_by(hatchery) %>% 
+  group_split() %>% 
+  setNames(c("CH", "FRH", "MRH", "NH"))
+```
+
+
+
+
+# Expected and observed heterozygosity
+
+
+### Strays NOT removed
+
+```{r}
+ho.program.mean <- lapply(genos_het, function(x){
+
+  x <- distinct(x)
+  x[x == 0 ]<-NA
+  
+  gt <- df2gtypes(x, ploidy = 2, strata = NULL, id.col = 1, loc.col = 2)
+  
+  Ho.lo <- heterozygosity(gt, by.strata = FALSE, type = "observed") 
+  #Ho by locus
+
+Ho.stra <- heterozygosity(gt, by.strata = TRUE, type = "observed") 
+  #Ho by stratum and locus
+
+Ho.mean <- heterozygosity(gt, by.strata = FALSE, type = "observed") %>% 
+  summarise(mean(obsvd.het)) #mean Ho over all loci
+  #  mean(obsvd.het)
+})
+
+he.program.mean <- lapply(genos_het, function(x){
+
+  x <- distinct(x)
+  x[x == 0 ]<-NA
+  
+  gt <- df2gtypes(x, ploidy = 2, strata = NULL, id.col = 1, loc.col = 2)
+  
+  Ho.lo <- heterozygosity(gt, by.strata = FALSE, type = "observed") 
+  #Ho by locus
+
+Ho.stra <- heterozygosity(gt, by.strata = TRUE, type = "observed") 
+  #Ho by stratum and locus
+
+He.mean <- heterozygosity(gt, by.strata = FALSE, type = "expected") %>% 
+  summarise(mean(exptd.het)) #mean Ho over all loci
+  #  mean(obsvd.het)
+})
+
+# pull out mean He from list, convert to data.frame object, then reorganize for plotting
+MeanHe <- lapply(he.program.mean, '[[', 1) 
+he_mean <- data.frame(MeanHe) %>%
+  gather()
+he_mean <- he_mean %>%
+  mutate(SpawnYear = (do.call(rbind, strsplit(he_mean$key, split ="_"))[,2]),
+         Hatchery = (do.call(rbind, strsplit(he_mean$key, split ="_"))[,1])) %>%
+  rename("MeanHe"="value") %>%
+  select(-key) 
+
+# pull out mean Ho from list, convert to data.frame object, then reorganize for plotting
+MeanHo <- lapply(ho.program.mean, '[[', 1) 
+ho_mean <- data.frame(MeanHo) %>%
+  gather()
+ho_mean <- ho_mean %>%
+  mutate(SpawnYear = (do.call(rbind, strsplit(ho_mean$key, split ="_"))[,2]),
+         Hatchery = (do.call(rbind, strsplit(ho_mean$key, split ="_"))[,1])) %>%
+  rename("MeanHo"="value") %>%
+  select(-key) 
+
+# combine tables
+heho <- left_join(he_mean, ho_mean)%>% 
+  mutate(MeanHoe = (as.numeric(MeanHo)/as.numeric(MeanHe))) %>% 
+  rename("hatchery"="Hatchery", "year"="SpawnYear")
+
+write_csv(heho, "../tables/S1_He_Ho_all.csv")
+```
+
+### Strays REMOVED
+
+```{r}
+ho.program.meanr <- lapply(genos_hetr, function(x){
+
+  x <- distinct(x)
+  x[x == 0 ]<-NA
+  
+  gt <- df2gtypes(x, ploidy = 2, strata = NULL, id.col = 1, loc.col = 2)
+  
+  Ho.lo <- heterozygosity(gt, by.strata = FALSE, type = "observed") 
+  #Ho by locus
+
+Ho.stra <- heterozygosity(gt, by.strata = TRUE, type = "observed") 
+  #Ho by stratum and locus
+
+Ho.mean <- heterozygosity(gt, by.strata = FALSE, type = "observed") %>% 
+  summarise(mean(obsvd.het)) #mean Ho over all loci
+  #  mean(obsvd.het)
+})
+
+he.program.meanr <- lapply(genos_hetr, function(x){
+
+  x <- distinct(x)
+  x[x == 0 ]<-NA
+  
+  gt <- df2gtypes(x, ploidy = 2, strata = NULL, id.col = 1, loc.col = 2)
+  
+  Ho.lo <- heterozygosity(gt, by.strata = FALSE, type = "observed") 
+  #Ho by locus
+
+Ho.stra <- heterozygosity(gt, by.strata = TRUE, type = "observed") 
+  #Ho by stratum and locus
+
+He.mean <- heterozygosity(gt, by.strata = FALSE, type = "expected") %>% 
+  summarise(mean(exptd.het)) #mean Ho over all loci
+  #  mean(obsvd.het)
+})
+
+# pull out mean He from list, convert to data.frame object, then reorganize for plotting
+MeanHer <- lapply(he.program.meanr, '[[', 1) 
+he_meanr <- data.frame(MeanHer) %>%
+  gather()
+he_meanr <- he_meanr %>%
+  mutate(SpawnYear = (do.call(rbind, strsplit(he_meanr$key, split ="_"))[,2]),
+         Hatchery = (do.call(rbind, strsplit(he_meanr$key, split ="_"))[,1])) %>%
+  rename("MeanHe"="value") %>%
+  select(-key) 
+
+# pull out mean Ho from list, convert to data.frame object, then reorganize for plotting
+MeanHor <- lapply(ho.program.meanr, '[[', 1) 
+ho_meanr <- data.frame(MeanHor) %>%
+  gather()
+ho_meanr <- ho_meanr %>%
+  mutate(SpawnYear = (do.call(rbind, strsplit(ho_meanr$key, split ="_"))[,2]),
+         Hatchery = (do.call(rbind, strsplit(ho_meanr$key, split ="_"))[,1])) %>%
+  rename("MeanHo"="value") %>%
+  select(-key) 
+
+# combine tables
+hehor <- left_join(he_meanr, ho_meanr)%>% 
+  mutate(MeanHoe = (as.numeric(MeanHo)/as.numeric(MeanHe))) %>% 
+  rename("hatchery"="Hatchery", "year"="SpawnYear")
+
+write_csv(hehor, "../tables/S1_He_Ho_rem.csv")
+```
+
+
+# Fst
+
+
+* by program across year
+* by year in program
+
+This program takes way too long on all samples (same with STRUCTURE), so time to subset a random 300 individuals.
+
+```{r}
+set.seed(5)
+
+all_pop_sub <- all_pop %>% 
+  group_by(hatchery, year) %>% 
+  sample_n(50)
+
+rem_pop_sub <- rem_pop %>% 
+  group_by(hatchery, year) %>% 
+  sample_n(50)
+```
+
+
+
+
+## Across Programs and Years
+
+Similarity of returning adults programs to each other over time
+
+
+### Strays NOT removed
+
+```{r}
+fst_cv <- all_pop_sub %>% 
+  group_by(year)
+group_name_df <- group_keys(fst_cv)
+group_name <- unique(group_name_df$year)
+
+
+# filter by year into groups
+fst_rn <- fst_cv %>% 
+  group_by(year) %>% 
+  group_split() %>% 
+  setNames(group_name)
+
+
+# function to run fst on each year between programs, and extract results
+# ploidy is how many alleles
+# strata is what strata to compare
+# id.col is # id.column
+# loc.col is starting # loci columns
+
+fst_yr <- lapply(fst_rn, function(x){
+   x[x == 0 ]<-NA                         
+  gt <- df2gtypes(x, ploidy = 2, strata = 5, id.col = 1, loc.col = 6)
+  
+  fst <- pairwiseTest(gt, stats = "fst")
+  fst
+})
+
+fst_res <- fst_yr %>% 
+  setNames(group_name)
+
+fst_yr_rs <- lapply(fst_res, '[[', 1)
+
+# add CH-CH, FRH-FRH, etc for each
+fst_ed <- lapply(fst_yr_rs, function(x){
+ all <- x %>% 
+  expand(strata.1, strata.2) %>%
+  add_row(strata.1 = "CH", strata.2="CH") %>% 
+  add_row(strata.1 = "NH", strata.2="NH") %>%
+  add_row(strata.1 = "FRH", strata.2="CH") %>% 
+  add_row(strata.1 = "MRH", strata.2="CH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="CH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="FRH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="MRH") %>% 
+  mutate(type1 = paste0(strata.1,sep=":",strata.2),
+         type2 = paste0(strata.2,sep =":",strata.1)) %>% 
+  arrange(type1)
+ 
+ y <- x %>%
+  mutate(type1 = paste0(strata.1,sep=":",strata.2),
+         type2 = paste0(strata.2,sep =":",strata.1))
+
+fst_file <- left_join(all, y %>% select(type1, Fst, Fst.p.val)) %>% 
+  left_join(., y %>% select(type2, Fst, Fst.p.val), by=c("type1"="type2")) %>% 
+  mutate(Fst = coalesce(Fst.x, Fst.y),
+         Fst.p.val = coalesce(Fst.p.val.x, Fst.p.val.y)) %>% 
+  select(strata.1, strata.2, Fst, Fst.p.val) %>% 
+  mutate(Fst = case_when(
+    strata.1 != strata.2 ~ Fst,
+    strata.1 == strata.2 ~ 0),
+        Fst.p.val = case_when(
+    strata.1 != strata.2 ~ Fst.p.val,
+    strata.1 == strata.2 ~ 0.000999001))
+  
+})
+
+fst_ed <- Map(cbind, fst_ed, year = names(fst_ed)) 
+
+
+fst_results.f <- do.call(rbind.data.frame, fst_ed)
+write_csv(fst_results.f, "../tables/S2_fst_b_pro.csv")
+```
+
+
+### Strays REMOVED
+
+```{r}
+fst_cvr <- rem_pop_sub %>% 
+  group_by(year)
+group_name_dfr <- group_keys(fst_cvr)
+group_namer <- unique(group_name_dfr$year)
+
+
+# filter by year into groups
+fst_rnr <- fst_cvr %>% 
+  group_by(year) %>% 
+  group_split() %>% 
+  setNames(group_namer)
+
+
+# function to run fst on each year between programs, and extract results
+# ploidy is how many alleles
+# strata is what strata to compare
+# id.col is # id.column
+# loc.col is starting # loci columns
+
+fst_yrr <- lapply(fst_rnr, function(x){
+   x[x == 0 ]<-NA                         
+  gt <- df2gtypes(x, ploidy = 2, strata = 5, id.col = 1, loc.col = 6)
+  
+  fst <- pairwiseTest(gt, stats = "fst")
+  fst
+})
+
+fst_resr <- fst_yrr %>% 
+  setNames(group_namer)
+
+fst_yr_rsr <- lapply(fst_resr, '[[', 1)
+
+# add CH-CH, FRH-FRH, etc for each
+fst_edr <- lapply(fst_yr_rsr, function(x){
+ all <- x %>% 
+  expand(strata.1, strata.2) %>%
+  add_row(strata.1 = "CH", strata.2="CH") %>% 
+  add_row(strata.1 = "NH", strata.2="NH") %>%
+  add_row(strata.1 = "FRH", strata.2="CH") %>% 
+  add_row(strata.1 = "MRH", strata.2="CH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="CH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="FRH") %>% 
+  add_row(strata.1 = "NH", strata.2 ="MRH") %>% 
+  mutate(type1 = paste0(strata.1,sep=":",strata.2),
+         type2 = paste0(strata.2,sep =":",strata.1)) %>% 
+  arrange(type1)
+ 
+ y <- x %>%
+  mutate(type1 = paste0(strata.1,sep=":",strata.2),
+         type2 = paste0(strata.2,sep =":",strata.1))
+
+fst_file <- left_join(all, y %>% select(type1, Fst, Fst.p.val)) %>% 
+  left_join(., y %>% select(type2, Fst, Fst.p.val), by=c("type1"="type2")) %>% 
+  mutate(Fst = coalesce(Fst.x, Fst.y),
+         Fst.p.val = coalesce(Fst.p.val.x, Fst.p.val.y)) %>% 
+  select(strata.1, strata.2, Fst, Fst.p.val) %>% 
+  mutate(Fst = case_when(
+    strata.1 != strata.2 ~ Fst,
+    strata.1 == strata.2 ~ 0),
+        Fst.p.val = case_when(
+    strata.1 != strata.2 ~ Fst.p.val,
+    strata.1 == strata.2 ~ 0.000999001))
+  
+})
+
+fst_edr <- Map(cbind, fst_edr, year = names(fst_edr)) 
+
+
+fst_results.fr <- do.call(rbind.data.frame, fst_edr)
+write_csv(fst_results.fr, "../tables/S2_fst_b_pro_rem.csv")
+```
+
+#### Figure
+
+```{r}
+fst_plot <- fst_results.fr %>% 
+  mutate(plot_a = paste(year,"_",strata.1), 
+         plot_b = paste(year,"_",strata.2),
+         plot_c = paste(strata.1,":",strata.2))
+
+fsty_plot <- fst_plot %>% 
+  mutate(kp = case_when(
+    plot_c == "NH : CH" | plot_c == "NH : FRH" | plot_c == "NH : MRH" | plot_c == "MRH : FRH" | plot_c == "MRH : CH" | plot_c == "FRH : CH" 
+    ~ "rm",
+    plot_c != "NH : CH" | plot_c != "NH : FRH" | plot_c != "NH : MRH" | plot_c != "MRH : FRH" | plot_c != "MRH : CH" | plot_c != "FRH : CH" 
+    ~ "kp")) %>% 
+  filter(kp != "rm") %>% 
+  filter(Fst > 0)
+
+fsty_gg <- ggplot(fsty_plot)+
+  geom_point(aes(x=as.factor(year),y=Fst,shape=plot_c, fill= plot_c))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))+
+  labs(x = "Spawn year", y= "Fst")+
+  guides(color = guide_legend(override.aes = list(size = 10) ) )+
+  theme(legend.title = element_blank(), legend.key.size = unit(1, 'cm'))
+
+fsty_gg
+```
+
+```{r}
+ggsave(plot = fsty_gg, file = "../figures/S5_fstb.png", 
+       width = 15, height = 10, units = "cm", dpi = 800)
+```
+
+
+## Within Program Years
+
+How effectively are respective broodstock programs managed?
+
+
+### Strays NOT removed
+```{r}
+
+fst_pr <- all_pop_sub %>% 
+  group_by(hatchery)
+group_name_df <- group_keys(fst_pr)
+group_name <- unique(group_name_df$hatchery)
+
+
+# filter by hatchery into groups
+fst_prog <- fst_pr %>% 
+  group_by(hatchery) %>% 
+  group_split() %>% 
+  setNames(group_name)
+
+fst_yr <- lapply(fst_prog, function(x){
+                           
+  gt <- df2gtypes(x, ploidy = 2, strata = 4, id.col = 1, loc.col = 6)
+  
+  fst <- pairwiseTest(gt, stats = "fst")
+  fst
+})
+
+fst_res <- fst_yr %>% 
+  setNames(group_name)
+
+fst_b <- lapply(fst_res, '[[', 1) %>% 
+  setNames(c("CH","FRH","MRH","NH"))
+fst_data <- data.frame(fst_b) 
+
+fst_keep <- fst_data %>%
+  group_by(CH.strata.1) %>%
+  arrange(CH.strata.1) %>%
+  filter(row_number()==1) %>%
+  select(-FRH.strata.1, -FRH.strata.2, -MRH.strata.1, 
+         -MRH.strata.2, -NH.strata.1, -NH.strata.2) %>%
+  rename("SpawnYear1"="CH.strata.1",
+         "SpawnYear2"="CH.strata.2") 
+
+fst_keep <- fst_keep %>%
+  mutate(SpawnYears = paste(SpawnYear1, SpawnYear2, sep=":"))
+
+
+# great now pull out Fst for each program during each SpawnYear
+fst_ch <- fst_keep %>%
+  select(SpawnYears, CH.Fst) %>%
+  mutate(Hatchery = "CH") %>%
+  rename("Mean_Fst"="CH.Fst")
+fst_frh <- fst_keep %>%
+  select(SpawnYears, FRH.Fst) %>%
+  mutate(Hatchery = "FRH") %>%
+  rename("Mean_Fst"="FRH.Fst")
+fst_mrh <- fst_keep %>%
+  select(SpawnYears, MRH.Fst) %>%
+  mutate(Hatchery = "MRH") %>%
+  rename("Mean_Fst"="MRH.Fst")
+fst_nh <- fst_keep %>%
+  select(SpawnYears, NH.Fst) %>%
+  mutate(Hatchery = "NH") %>%
+  rename("Mean_Fst"="NH.Fst")
+
+fst_mean <- rbind(fst_ch, fst_frh, fst_mrh, fst_nh)
+write_csv(fst_mean, "../tables/S3_fst_w_pro.csv")
+```
+
+
+### Strays REMOVED
+```{r}
+
+fst_prr <- rem_pop_sub %>% 
+  group_by(hatchery)
+group_name_dfr <- group_keys(fst_prr)
+group_namer <- unique(group_name_dfr$hatchery)
+
+
+# filter by hatchery into groups
+fst_progr <- fst_prr %>% 
+  group_by(hatchery) %>% 
+  group_split() %>% 
+  setNames(group_namer)
+
+fst_yrr <- lapply(fst_progr, function(x){
+                           
+  gt <- df2gtypes(x, ploidy = 2, strata = 4, id.col = 1, loc.col = 6)
+  
+  fst <- pairwiseTest(gt, stats = "fst")
+  fst
+})
+
+fst_resr <- fst_yrr %>% 
+  setNames(group_name)
+
+fst_br <- lapply(fst_resr, '[[', 1) %>% 
+  setNames(c("CH","FRH","MRH","NH"))
+fst_datar <- data.frame(fst_br) 
+
+fst_keepr <- fst_datar %>%
+  group_by(CH.strata.1) %>%
+  arrange(CH.strata.1) %>%
+  filter(row_number()==1) %>%
+  select(-FRH.strata.1, -FRH.strata.2, -MRH.strata.1, 
+         -MRH.strata.2, -NH.strata.1, -NH.strata.2) %>%
+  rename("SpawnYear1"="CH.strata.1",
+         "SpawnYear2"="CH.strata.2") 
+
+fst_keepr <- fst_keepr %>%
+  mutate(SpawnYears = paste(SpawnYear1, SpawnYear2, sep=":"))
+
+
+# great now pull out Fst for each program during each SpawnYear
+fst_chr <- fst_keepr %>%
+  select(SpawnYears, CH.Fst) %>%
+  mutate(Hatchery = "CH") %>%
+  rename("Mean_Fst"="CH.Fst")
+fst_frhr <- fst_keepr %>%
+  select(SpawnYears, FRH.Fst) %>%
+  mutate(Hatchery = "FRH") %>%
+  rename("Mean_Fst"="FRH.Fst")
+fst_mrhr <- fst_keepr %>%
+  select(SpawnYears, MRH.Fst) %>%
+  mutate(Hatchery = "MRH") %>%
+  rename("Mean_Fst"="MRH.Fst")
+fst_nhr <- fst_keepr %>%
+  select(SpawnYears, NH.Fst) %>%
+  mutate(Hatchery = "NH") %>%
+  rename("Mean_Fst"="NH.Fst")
+
+fst_meanr <- rbind(fst_chr, fst_frhr, fst_mrhr, fst_nhr)
+write_csv(fst_meanr, "../tables/S3_fst_w_pro_rem.csv")
+```
+
+# STRUCTURE
+
+Using slg_pipe (https://github.com/eriqande/slg_pipe), run STRUCTURE on data subsets (all_pop_sub and rem_pop_sub). See link for further installation and use instructions. slg_pipe is run outside of R in terminal, but easiest to format the datasets here. 
+
+Once slg_pipe installed, it's easiest to make copy of those files and paste it into your Rproject directory. In this project, the files from slg_pipe are stored in "structure"
+
+open DefaultSettingsStandard.sh and: 
+* set all analyses except PREPARE_STRUCTURE_AREA to 0
+* set k to 2 3 4
+* set reps to 1 1 1
+
+
+### Strays NOT removed
+```{r}
+Sa <- all_pop_sub %>% 
+  mutate(slg_name = sprintf("%s%03d", hatchery, 1:n()), 
+         .after = hatchery) %>% 
+  ungroup()
+
+# keep columns Nmfs_Dna_id, collection year, hatchery info, new id col
+s_meta <- Sa %>% 
+  select(1:6)
+write_rds(s_meta, "../processed_data/structure_all_pop_meta.rds")
+
+s3 <- Sa %>% 
+  ungroup() %>% 
+  select(-(1:5))
+
+# confirm no genotype = 0 not NA
+
+names(s3)[seq(3,ncol(s3), by=2)] <- names(s3)[seq(2,ncol(s3), by=2)]
+
+names(s3)[1] <- ""
+
+write.table(s3, "../structure/arena/pops4slg.txt", col.names = TRUE, row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+In terminal, navigate to structure/arena directory
+
+then run:
+../script/pops_list_from_sgl_pipe.sh pops4slg.txt > pops.txt 
+../script/locus_list_from_sgl_pipe.sh pops4slg.txt > locus.txt
+../script/Do_standard_analyses.sh pops4slg.txt pops.txt locus.txt ALL_POP DefaultSettingsStandard.sh
+
+then navigate to new directory (ALL_POP>StructureArea>arena) and run:
+nohup ../script/ExecuteStructureRuns.sh  3  > BIG_LOG.txt  2>&1 &
+
+
+Once this is done running, navigate up a level to clump_and_distruct then run:
+
+./script/ClumpAndDistructAll.sh 3
+./script/LaTeXify.sh ./final_pdf/ "2 3 4" > all_pops.tex
+pdflatex all_pops.tex
+open all_pops.pdf
+
+
+If you get an error running the first line of code about not finding le2unix, you can try opening the following scripts (in slg_pipe scripts folder) and adding ../bin/ before le2unix (originally has only le2unix, change to ../bin/le2unix):
+* pops_list_from_sgl_pipe.sh
+* locus_list_from_sgl_pipe.sh
+
+### Strays REMOVED
+```{r}
+Sar <- rem_pop_sub %>% 
+  mutate(slg_name = sprintf("%s%03d", hatchery, 1:n()), 
+         .after = hatchery) %>% 
+  ungroup()
+
+# keep columns Nmfs_Dna_id, collection year, hatchery info, new id col
+s_metar <- Sar %>% 
+  select(1:6)
+write_rds(s_metar, "../processed_data/structure_rem_pop_meta.rds")
+
+s3r <- Sar %>% 
+  ungroup() %>% 
+  select(-(1:5))
+
+# confirm no genotype = 0 not NA
+
+names(s3r)[seq(3,ncol(s3r), by=2)] <- names(s3r)[seq(2,ncol(s3r), by=2)]
+
+names(s3r)[1] <- ""
+
+write.table(s3r, "../structure/arena/pops4slg_rem.txt", col.names = TRUE, row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+
+In terminal, navigate back to structure/arena directory
+
+then run:
+../script/pops_list_from_sgl_pipe.sh pops4slg_rem.txt > pops_rem.txt 
+../script/locus_list_from_sgl_pipe.sh pops4slg_rem.txt > locus_rem.txt
+../script/Do_standard_analyses.sh pops4slg_rem.txt pops_rem.txt locus_rem.txt REM_POP DefaultSettingsStandard.sh
+
+then navigate to new directory (REM_POP>StructureArea>arena) and run:
+nohup ../script/ExecuteStructureRuns.sh  3  > BIG_LOG.txt  2>&1 &
+
+Once this is done running, navigate up a level to clump_and_distruct then run:
+
+./script/ClumpAndDistructAll.sh 3
+./script/LaTeXify.sh ./final_pdf/ "2 3 4" > removed.tex
+pdflatex removed.tex
+open removed.pdf
+
+
+
+### PCA - strays NOT removed
+
+Remove ID columns from Sa1, then use prcomp() to run PCA, use augment function from broom to bind ids back on and then plot
+```{r}
+library(broom)
+# convert NAs back to 0, remove other columns
+Sa1 <- Sa %>% 
+  select(-spawner_group, -sex, -year, -hatchery)
+Sa1[is.na(Sa1)] <- 0
+
+pca_1 <- Sa1 %>%
+  select(where(is.numeric)) %>% # retain only numeric columns
+  scale() %>% # scale data
+  prcomp() # do PCA
+pca_1gg <- pca_1 %>%
+  augment(Sa) %>% 
+  ggplot(aes(.fittedPC1, .fittedPC2, color = hatchery)) + 
+  geom_point(size = 1.5) +
+  theme_classic()+
+  scale_color_manual(values = c(CH="#9379AD", FRH="#e4af62", MRH="#b65d2b", NH="#79ad9f"))+
+  ggtitle("PCA - All Years, strays not removed")
+pca_1gg
+
+ggsave(plot = pca_1gg, file = "../figures/S4_PCA1.png", 
+       #bg = "transparent",
+       width = 20, height = 15, units = "cm", dpi = 800)
+```
+
+### PCA - strays REMOVED
+
+Remove ID columns from Sa1, then use prcomp() to run PCA, use augment function from broom to bind ids back on and then plot
+```{r}
+# convert NAs back to 0, remove other columns
+Sa1r <- Sar %>% 
+  select(-spawner_group, -sex, -year, -hatchery)
+Sa1r[is.na(Sa1r)] <- 0
+
+pca_1r <- Sa1r %>%
+  select(where(is.numeric)) %>% # retain only numeric columns
+  scale() %>% # scale data
+  prcomp() # do PCA
+pca_1rgg <- pca_1r %>%
+  augment(Sar) %>% 
+  ggplot(aes(.fittedPC1, .fittedPC2, color = hatchery)) + 
+  geom_point(size = 1.5) +
+  theme_classic()+
+  scale_color_manual(values = c(CH="#9379AD", FRH="#e4af62", MRH="#b65d2b", NH="#79ad9f"))+
+  ggtitle("PCA - All Years, strays removed")
+pca_1rgg
+
+ggsave(plot = pca_1rgg, file = "../figures/S4_PCA2.png", 
+       #bg = "transparent",
+       width = 20, height = 15, units = "cm", dpi = 800)
+```
+

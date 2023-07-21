@@ -1,0 +1,355 @@
+---
+title: "CVSH_4: Parentage Assessment"
+output: html_notebook
+---
+
+# Overview 
+
+Interested in:
+
+* number of offspring per unique pair and individual
+* number of offspring per each use (by sex)
+
+
+Each figure will show one point for each trio - will do all analyses for overall program, then by both cohort(spawnyear) and return(kid_year) year
+
+```{r}
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+```
+
+```{r}
+cvsh <- read_rds("../processed_data/CV_pedigree.rds")
+clusters <- read_rds("../metadata/clusters.rds")
+meta_ct <- read_csv("../processed_data/1_pbt_count.csv")
+```
+
+```{r}
+cvsh_par <- cvsh %>% 
+  separate_rows(ma_sg, sep=",") %>% 
+  separate_rows(pa_sg, sep=",") %>% 
+  filter(ma_sg==pa_sg) %>% 
+  distinct()
+```
+
+
+# Number of Offspring Assigned
+
+To determine % assigned, add total genotyped from the final meta file
+
+PopName and SpawnYear = origin hatchery and release year
+kid_hatchery and kid_year = return hatchery and return year
+
+```{r}
+trio_count <- cvsh_par %>% 
+  separate_rows(kid_year,sep=",") %>% 
+  group_by(PopName, kid_hatchery, SpawnYear, kid_year) %>% 
+  count() %>% 
+  mutate(par_col = paste(PopName, SpawnYear, sep="_"),
+         kid_col = paste(kid_hatchery, kid_year, sep="_")) %>% 
+  ungroup() %>% 
+  select(-PopName, -kid_hatchery, -SpawnYear, -kid_year) %>% 
+  add_row(n = c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0), 
+          par_col = c("CH_2011","FRH_2011","MRH_2011","NH_2011", "CH_2012", "FRH_2012", "MRH_2012", "NH_2012", "NH_2013",
+                      "CH_2018", "CH_2019", "FRH_2018", "FRH_2019", "MRH_2018", "MRH_2019", "NH_2018", "NH_2019"), 
+          kid_col = c("CH_2011","FRH_2011","MRH_2011","NH_2011", "CH_2012", "FRH_2012", "MRH_2012", "NH_2012", "NH_2013",
+                      "CH_2018", "CH_2019", "FRH_2018", "FRH_2019", "MRH_2018", "MRH_2019", "NH_2018", "NH_2019"
+                      )) %>% 
+  arrange(par_col, kid_col) %>% 
+  pivot_wider(names_from = par_col, values_from = n) %>% 
+  arrange(kid_col)
+
+# turn NAs to 0s
+trio_count[is.na(trio_count)]<-0
+
+
+meta_ct2 <- meta_ct %>%
+  mutate(kid_col = paste(hatchery, year, sep="_")) %>%
+  select(-hatchery,-year,-total) %>% 
+  select(kid_col, n) %>% 
+  rename("total_offspring"="n")
+
+# bind on count per year/program from meta_ct
+trio_final <- left_join(meta_ct2, trio_count, by="kid_col") %>% 
+  group_by(kid_col) %>% 
+  mutate(total_assigned = rowSums(across(where(is.numeric)), na.rm = TRUE)-total_offspring) %>% 
+  mutate(percent_assigned = total_assigned/total_offspring*100, .after=total_offspring) 
+
+write_csv(trio_final, "../tables/S5_parentage.csv")
+```
+
+
+# Number of Uses and Number of Assigned Returning Offspring
+
+Order clusters by year and spawn date then give numerical count for no. use - because this is focused on number of returning offspring per use, we will be binding to ma and pa columns
+
+```{r}
+# classify clusters as itero or repeat, add spawn number count, then bind on pedigree 
+clu_or <- clusters %>% 
+  group_by(year, spawner_group, hatchery, sex) %>% 
+  count(cluster, retained_id)
+
+clu_ord <- clu_or %>% 
+  mutate(type.use = case_when(
+    n == 1 ~ "iteroparous",
+    n > 1 ~ "repeat"
+  )) %>% 
+  select(-n) %>% 
+  group_by(retained_id) %>% 
+  arrange(mdy(spawner_group)) %>% 
+  mutate(no.use = 1:n())
+
+# number of offspring assigned per each ma (per spawn and total)
+ma_ped <- left_join(cvsh_par, clu_ord %>% select(retained_id, type.use, spawner_group, no.use), by=c("ma"="retained_id", "ma_sg"="spawner_group")) %>% 
+  replace_na(list(no.use = 1, type.use = "once")) %>% 
+  group_by(ma, type.use, no.use, ma_sg) %>% 
+  count() %>% 
+  rename("offs.p.spawn"="n") %>% 
+  group_by(ma) %>% 
+  mutate(total.p.ma = sum(offs.p.spawn)) %>% 
+  ungroup() %>% 
+  mutate(sex = "Female") 
+
+# number of assigned parents by spawn use type (itero, repeat, single)
+ma_use_ct <- ma_ped %>% 
+  select(type.use, no.use, ma) %>% 
+  group_by(type.use, no.use) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(sex = "Female", .after=no.use) %>% 
+  arrange(type.use) %>% 
+  rename("no.spawners"="n")
+
+# mean number of assigned offspring by no. spawn
+## and mean number of assigned offspring by all recorded spawns
+ma_kid_ct <- ma_ped %>% 
+  group_by(type.use, no.use) %>% 
+  select(type.use, no.use, sex, offs.p.spawn, total.p.ma) %>% 
+  mutate(mean_kids.spawn = mean(offs.p.spawn), 
+         mean_kids.total = mean(total.p.ma)) %>% 
+  select(-offs.p.spawn, -total.p.ma) %>% 
+  distinct()
+  
+# bind together
+ma_kid_sp <- left_join(ma_use_ct, ma_kid_ct) 
+  
+
+
+# number of offspring assigned per each pa (per spawn and total)
+pa_ped <- left_join(cvsh_par, clu_ord %>% select(retained_id, type.use, spawner_group, no.use), by=c("pa"="retained_id", "pa_sg"="spawner_group")) %>% 
+  replace_na(list(no.use = 1, type.use = "once")) %>% 
+  group_by(pa, type.use, no.use, pa_sg) %>% 
+  count() %>% 
+  rename("offs.p.spawn"="n") %>% 
+  group_by(pa) %>% 
+  mutate(total.p.pa = sum(offs.p.spawn)) %>% 
+  ungroup() %>% 
+  mutate(sex = "Male") 
+
+# number of assigned parents by spawn use type (itero, repeat, single)
+pa_use_ct <- pa_ped %>% 
+  select(type.use, no.use, pa) %>% 
+  group_by(type.use, no.use) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(sex = "Male", .after=no.use) %>% 
+  arrange(type.use) %>% 
+  rename("no.spawners"="n")
+
+# mean number of assigned offspring by no. spawn
+## and mean number of assigned offspring by all recorded spawns
+pa_kid_ct <- pa_ped %>% 
+  group_by(type.use, no.use) %>% 
+  select(type.use, no.use, sex, offs.p.spawn, total.p.pa) %>% 
+  mutate(mean_kids.spawn = mean(offs.p.spawn), 
+         mean_kids.total = mean(total.p.pa)) %>% 
+  select(-offs.p.spawn, -total.p.pa) %>% 
+  distinct()
+  
+# bind together
+pa_kid_sp <- left_join(pa_use_ct, pa_kid_ct) 
+  
+
+no_use_f <- rbind(ma_kid_sp, pa_kid_sp)
+write_csv(no_use_f, "../tables/S6_par.nspawn.csv")  
+```
+
+
+## t-tests
+
+datasets
+
+```{r}
+pa_t <- pa_ped %>% 
+  group_by(type.use, no.use) %>% 
+  select(type.use, no.use, sex, offs.p.spawn, total.p.pa) %>% 
+  mutate(mean_kids.spawn = mean(offs.p.spawn), 
+         mean_kids.total = mean(total.p.pa))
+
+ma_t <- ma_ped %>% 
+  group_by(type.use, no.use) %>% 
+  select(type.use, no.use, sex, offs.p.spawn, total.p.ma) %>% 
+  mutate(mean_kids.spawn = mean(offs.p.spawn), 
+         mean_kids.total = mean(total.p.ma))
+```
+
+
+each type.use by total.p.ma/pa
+each type.use by first spawn mean_kids.spawn p.ma/pa
+
+divide by sex into two datasets, then divide into three sets each: comparing each use type within sex
+
+## Type of Use by Lifetime Success
+
+### Females: iteroparous v. once
+
+```{r}
+fem_it <- ma_t %>%
+  filter(type.use == "iteroparous") %>%
+  ungroup() %>%
+  select(total.p.ma)
+
+fem_on <- ma_t %>%
+  filter(type.use == "once") %>%
+  ungroup() %>%
+  select(total.p.ma)
+
+t.test(fem_it, fem_on) # unpaired t test
+
+
+```
+
+### Females: repeat v. once
+
+```{r}
+fem_re <- ma_t %>%
+  filter(type.use == "repeat") %>%
+  ungroup() %>%
+  select(total.p.ma)
+
+t.test(fem_re, fem_on) # unpaired t test
+
+```
+
+### Females: iteroparous v. repeat
+
+```{r}
+t.test(fem_it, fem_re)
+```
+
+### Males: iteroparous v. once
+
+```{r}
+mal_it <- pa_t %>%
+  filter(type.use == "iteroparous") %>%
+  ungroup() %>%
+  select(total.p.pa)
+
+mal_on <- pa_t %>%
+  filter(type.use == "once") %>%
+  ungroup() %>%
+  select(total.p.pa)
+
+t.test(mal_it, mal_on) # unpaired t test
+
+
+```
+
+### Males: repeat v. once
+
+```{r}
+mal_re <- pa_t %>%
+  filter(type.use == "repeat") %>%
+  ungroup() %>%
+  select(total.p.pa)
+
+t.test(mal_re, mal_on) # unpaired t test
+
+```
+
+### Males: iteroparous v. repeat
+
+```{r}
+t.test(mal_it, mal_re)
+```
+
+
+## Type of Use by First Spawn Success
+
+### Females: iteroparous v. once
+
+```{r}
+fema_it <- ma_t %>%
+  filter(no.use == 1) %>%
+  filter(type.use == "iteroparous") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+fema_re <- ma_t %>%
+  filter(no.use == 1) %>%
+  filter(type.use == "repeat") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+fema_on <- ma_t %>%
+  filter(type.use == "once") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+t.test(fema_it, fema_on) # unpaired t test
+
+
+```
+
+### Females: repeat v. once
+
+```{r}
+t.test(fema_re, fema_on)
+```
+
+### Females iteroparous v. repeat
+
+```{r}
+t.test(fema_it, fema_re)
+```
+
+
+### Males: iteroparous v. once
+
+```{r}
+male_it <- pa_t %>%
+  filter(no.use == 1) %>%
+  filter(type.use == "iteroparous") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+male_re <- pa_t %>%
+  filter(no.use == 1) %>%
+  filter(type.use == "repeat") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+male_on <- pa_t %>%
+  filter(type.use == "once") %>%
+  ungroup() %>%
+  select(offs.p.spawn)
+
+t.test(male_it, male_on) # unpaired t test
+
+
+```
+
+### Males: repeat v. once
+
+```{r}
+t.test(male_re, male_on)
+```
+
+### Males iteroparous v. repeat
+
+```{r}
+t.test(male_it, male_re)
+```

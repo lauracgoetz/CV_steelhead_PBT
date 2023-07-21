@@ -1,0 +1,388 @@
+---
+title: "6_CVSH: Omy05"
+output: html_notebook
+---
+
+# Overview
+
+Omy05 is an inversion strongly associated with expression of anadromy/residency - in CV we use the SNP Omy_R04944 but this wasn't added to our SNP panel until halfway through the study period. There is another Omy05 SNP (SH114448), but it isn't as strongly linked in the CV inversion, so not going to use it here. 
+
+
+Interested in: 
+
+* Omy05 allele frequencies / HWE
+* Omy05 genotype frequencies by programs, age, sex
+* frequency of AR x AR spawnings
+* Omy05 genotype frequencies by binned date
+
+
+# Omy05 File 
+
+Omy05 genotypes saved in metadata/omy05_genos.csv, make list of NMFS_DNA_IDs and Omy05 genotypes then merge onto the pedigree. The Merged.csv 
+
+```{r}
+library(tidyverse)
+
+omy5 <- read_csv("../metadata/omy05_genos.csv")  %>% 
+  mutate(Omy05 = case_when(
+    Omy_R04944 & Omy_R04944_1 == 2 ~ "RR",
+    Omy_R04944 != Omy_R04944_1 ~ "AR",
+    Omy_R04944 & Omy_R04944_1 == 4 ~ "AA"
+  )) %>% 
+  filter(!is.na(Omy05)) %>% 
+  rename("hatchery"="SNPPIT.Descriptor") %>% 
+  mutate(sex = case_when(
+    Genetic_Sex != "?" & SEX == Sex ~ paste(Sex),
+    Genetic_Sex == "?" & SEX == Sex ~ paste(Sex),
+    Genetic_Sex == Sex ~ paste(Sex)), .after = SEX) %>% 
+  select(-SEX, -Genetic_Sex, -Sex) %>% 
+  filter(!is.na(sex))
+
+# 13,090 Omy05 genotypes
+
+  
+
+```
+
+
+We have Omy_R04944 genotypes for 13,090 samples.
+
+# Program Omy05 Genotype Counts
+
+## Overall
+
+```{r}
+omy5_cnt <- omy5 %>% 
+  group_by(hatchery) %>% 
+  count(Omy05) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) 
+```
+
+
+## By sex
+```{r}
+omy5s_cnt <- omy5 %>% 
+  group_by(hatchery, sex) %>% 
+  count(Omy05) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) 
+```
+
+
+## Summary table
+
+```{r}
+p1 <- omy5_cnt %>% 
+  select(hatchery, Omy05, final_col) %>% 
+  pivot_wider(names_from = hatchery, values_from = final_col) %>% 
+  mutate(sex = "total", .after= Omy05)
+
+p2 <- omy5s_cnt %>% 
+  select(hatchery, Omy05, sex, final_col) %>% 
+  pivot_wider(names_from = hatchery, values_from = final_col)
+
+sumomy5 <- rbind(p1, p2) %>% 
+  arrange(Omy05)
+
+write_csv(sumomy5, "../tables/6_omy5.csv")
+```
+
+
+
+## HWE
+
+CH and MRH in HWE, FRH and NH not in HWE.
+```{r}
+library(HardyWeinberg)
+
+omy5.CH <- omy5_cnt %>% 
+  filter(hatchery == "CH") 
+omy5.FRH <- omy5_cnt %>% 
+  filter(hatchery == "FRH")
+omy5.MRH <- omy5_cnt %>% 
+  filter(hatchery == "MRH")
+omy5.NH <- omy5_cnt %>% 
+  filter(hatchery == "NH")
+
+ch.omy5 <- omy5.CH$n
+frh.omy5 <- omy5.FRH$n
+mrh.omy5 <- omy5.MRH$n
+nh.omy5 <- omy5.NH$n
+```
+
+```{r}
+HW.test.CH <- HWExact(ch.omy5)
+```
+
+```{r}
+HW.test.FRH <- HWExact(frh.omy5)
+```
+
+```{r}
+HW.test.MRH <- HWExact(mrh.omy5)
+```
+
+```{r}
+HW.test.NH <- HWExact(nh.omy5)
+```
+
+```{r}
+# across all programs
+omyall <- omy5 %>% 
+  ungroup() %>% 
+  count(Omy05) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) 
+
+HW.test.all <-HWExact(omyall$n)
+```
+
+```{r}
+# across CV only
+omycv <- omy5 %>% 
+  filter(hatchery != "NH") %>% 
+  ungroup() %>% 
+  count(Omy05) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) 
+
+HW.test.all <-HWExact(omycv$n)
+```
+
+
+
+
+# Omy05, Age, and Sex
+
+To determine age and Omy05 genotype, need to use pedigree (and cluster list if needed?) to bind Omy05 genotype to kid column from pedigree.
+
+```{r}
+cvsh <-read_rds("../processed_data/CV_pedigree.rds")
+
+clu <-read_rds("../metadata/clusters.rds")
+
+clu_omy5 <- left_join(omy5 %>% select(NMFS_DNA_ID, Omy05) %>% rename("original_id"="NMFS_DNA_ID"), clu) %>% 
+  filter(!is.na(cluster))
+
+
+# separate kid years apart so we can calculate age for each year they spawned - this increases the dataset from 13,421 trios to 13,984 trios with iteroparous individuals gaining an additional representation for each year (and age class) they appear in
+age <- cvsh %>% 
+  separate_rows(kid_year) %>% 
+  mutate(age_spawn = as.numeric(kid_year)-as.numeric(SpawnYear))
+```
+
+Create age/omy5 file
+
+Mostly 2-4 yos, with some 5 and 6 yos - there were four 6yos (CH AA male, MRH AA female, NH AA female, NH RR female) and sixteen 5yos (7 CH AA females, 4 CH AA males, 1 CH AR female, 3 FRH AA females, 1 FRH AR female). 
+
+```{r}
+kid_omy5 <- left_join(omy5, age %>% select(kid, kid_sex, kid_year, kid_hatchery, age_spawn), by=c("NMFS_DNA_ID"="kid")) %>% 
+  filter(!is.na(age_spawn))
+# 10,293 omy05 genotypes for kids / age and Omy05
+
+ages_ct <- kid_omy5 %>% 
+  group_by(hatchery, Omy05, kid_sex) %>% 
+  count(age_spawn)
+
+ages_ct_f <- ages_ct %>% 
+  filter(age_spawn <5) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(hatchery, Omy05, kid_sex, age_spawn, final_col) %>% 
+  pivot_wider(names_from = hatchery, values_from = final_col)
+
+age_ct <- kid_omy5 %>% 
+  group_by(hatchery, Omy05) %>% 
+  count(age_spawn)
+
+age_ct_f <- age_ct %>% 
+  filter(age_spawn <5) %>% 
+  mutate(total = sum(n), freq = n/sum(n)) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(hatchery, Omy05, age_spawn, final_col) %>% 
+  pivot_wider(names_from = hatchery, values_from = final_col) %>% 
+  mutate(kid_sex = "total", .after= Omy05)
+
+omy_age_f <- rbind(age_ct_f, ages_ct_f) %>% 
+  arrange(Omy05)
+
+write_csv(omy_age_f, "../tables/S10_omyagesex.csv")
+```
+
+```{r}
+omy_sex <- kid_omy5 %>% 
+  group_by(hatchery, Omy05, kid_sex) %>% 
+  count(age_spawn) %>% 
+  filter(age_spawn <5) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+
+omy_sex_gg <- ggplot(omy_sex %>% filter(age_spawn <5))+
+  geom_col(aes(x=as.factor(age_spawn), y=freq, fill = Omy05), position = "dodge")+
+  facet_grid(kid_sex~hatchery)+
+  theme_classic()+
+  guides(fill = guide_legend(title="Omy05"))+
+  labs(x="Program", y="Proportion")+
+  scale_fill_manual(values = c("#959be9","#ace1af", "#f94f4c"))+
+  geom_text(aes(y=(freq)+0.07, label=n, group=Omy05, x=as.factor(age_spawn)), position = position_dodge(width = 1), size = 1) 
+
+ggsave(plot=omy_sex_gg, file="../figures/Fig4_omy5.png", width = 15, height = 10, units = "cm", dpi = 800)
+
+omy_sex_gg
+```
+
+# Frequency of ARxAR spawnings
+
+
+```{r}
+# bind on ids to cvsh 
+pedmy5 <- left_join(omy5, cvsh, by=c("NMFS_DNA_ID"="ma")) %>% 
+  rename("ma_omy05"="Omy05") %>% 
+  left_join(omy5, ., by=c("NMFS_DNA_ID"="pa")) %>% 
+  rename("pa_omy05"="Omy05") 
+
+# determine ARxAR matings
+omy_pairs <- pedmy5 %>% 
+  filter(!is.na(pa_omy05) & !is.na(ma_omy05)) %>% 
+  mutate(parent_omy = paste(ma_omy05, "x", pa_omy05)) 
+
+# filter for trios with AR genotypes in both ma and pa AR 
+ar_pairs <- omy_pairs %>% 
+  filter(parent_omy == "AR x AR") 
+
+ar_pair_kids <- filter(omy5, NMFS_DNA_ID %in% ar_pairs$kid)
+# 465 kids
+
+ar_count <- ar_pair_kids %>% 
+  group_by(hatchery, sex) %>% 
+  count(Omy05) %>% 
+  mutate(total= sum(n), freq = n/sum(n))
+  
+ar_count_f <- ar_count %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(hatchery, Omy05, sex, final_col) %>% 
+  pivot_wider(names_from = hatchery, values_from = final_col) %>% 
+  arrange(Omy05)
+
+write_csv(ar_count_f, "../tables/S9_omy5AR.csv")
+
+
+```
+
+
+## Chi-square 
+```{r}
+ar.CH.f <- ar_count %>%
+  filter(hatchery == "CH" & sex == "Female")
+ar.CH.m <- ar_count %>%
+  filter(hatchery == "CH" & sex == "Male")
+ar.FRH.f <- ar_count %>%
+  filter(hatchery == "FRH" & sex == "Female")
+ar.FRH.m <- ar_count %>%
+  filter(hatchery == "FRH" & sex == "Male")
+ar.MRH.f <- ar_count %>%
+  filter(hatchery == "MRH" & sex == "Female")
+ar.MRH.m <- ar_count %>%
+  filter(hatchery == "MRH" & sex == "Male")
+ar.NH.f <- ar_count %>%
+  filter(hatchery == "NH" & sex == "Female")
+ar.NH.m <- ar_count %>%
+  filter(hatchery == "NH" & sex == "Male")
+
+ch.ar.f <- ar.CH.f$n
+ch.ar.m <- ar.CH.m$n
+frh.ar.f <- ar.FRH.f$n
+frh.ar.m <- ar.FRH.m$n
+mrh.ar.f <- ar.MRH.f$n
+mrh.ar.m <- ar.MRH.m$n
+nh.ar.f <- ar.NH.f$n
+nh.ar.m <- ar.NH.m$n
+```
+
+
+```{r}
+HWch.test.CH.f <- HWChisq(ch.ar.f)
+```
+
+```{r}
+HWch.test.CH.m <- HWChisq(ch.ar.m)
+```
+
+```{r}
+HWch.test.FRH.f <- HWChisq(frh.ar.f)
+```
+
+```{r}
+HWch.test.FRH.m <- HWChisq(frh.ar.m)
+```
+
+```{r}
+HWch.test.MRH.f <- HWChisq(mrh.ar.f)
+```
+
+```{r}
+HWch.test.MRH.m <- HWChisq(mrh.ar.m)
+```
+
+```{r}
+HWch.test.NH.f <- HWChisq(nh.ar.f)
+```
+
+```{r}
+HWch.test.NH.m <- HWChisq(nh.ar.m)
+```
+
+### Overall 
+
+Check across programs by sex
+
+```{r}
+ar_counto <- ar_pair_kids %>% 
+  group_by(sex) %>% 
+  count(Omy05) %>% 
+  mutate(total= sum(n), freq = n/sum(n))
+of <- ar_counto %>% 
+  filter(sex=="Female")
+of.f <- of$n
+HWch.o.f <- HWChisq(of.f)
+```
+
+```{r}
+om <- ar_counto %>% 
+  filter(sex=="Male")
+om.m <- om$n
+HWch.o.m <- HWChisq(om.m)
+```
+
+
+### CV only
+
+```{r}
+ar_countcv <- ar_pair_kids %>% 
+  filter(hatchery != "NH") %>% 
+  group_by(sex) %>% 
+  count(Omy05) %>% 
+  mutate(total= sum(n), freq = n/sum(n))
+cvf <- ar_countcv %>% 
+  filter(sex=="Female")
+cvf.f <- cvf$n
+HWch.cv.f <- HWChisq(cvf.f)
+```
+
+```{r}
+cvm <- ar_countcv %>% 
+  filter(sex=="Male")
+cvm.m <- cvm$n
+HWch.cv.m <- HWChisq(cvm.m)
+```
+
+
+
+

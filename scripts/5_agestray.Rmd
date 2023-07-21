@@ -1,0 +1,451 @@
+---
+title: "CVSH_5: Age and Straying"
+output: html_notebook
+---
+
+# Overview
+
+Interested in:
+
+* age structure at program overall
+* age at spawning by cohort and return year
+* age at spawning by binned spawn date
+* mean/median spawn dates by age and sex
+* straying counts per origin/return programs
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(lubridate)
+library(maps)
+```
+
+```{r}
+cvsh <-read_rds("../processed_data/CV_pedigree.rds") # load in pedigree
+
+# separate kid years apart so we can calculate age for each year they spawned
+age <- cvsh %>% 
+  separate_rows(kid_year) %>% 
+  mutate(age_spawn = as.numeric(kid_year)-as.numeric(SpawnYear))
+```
+
+# Age Structure by Program
+
+## Overall
+
+```{r}
+age_pro <- age %>% 
+  group_by(PopName) %>% 
+  count(age_spawn) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+
+age_pro_234 <- age %>% 
+  group_by(PopName) %>% 
+  count(age_spawn) %>% 
+  filter(age_spawn <5) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+Kruskal-wallis: age_spawn by program
+```{r}
+options(digits = 7)
+kruskal.test(age_pro, age_spawn~PopName)
+```
+
+```{r}
+age_pro_gg <- ggplot(age_pro_234 %>% filter(age_spawn <5))+
+  geom_col(aes(x=PopName, y=freq, fill = as.factor(age_spawn)), 
+           position = position_fill(reverse = TRUE))+
+  scale_fill_manual(values = c("#39a5c2","#7ee76c","#fff995"))+
+  theme_classic()+
+  guides(fill = guide_legend(reverse = TRUE, title="Spawning Age"))+
+  labs(x="Program", y="Proportion")+
+  geom_text(aes(label=total, x=PopName, y=1.1), size = 2) 
+age_pro_gg
+```
+
+## By Program and Sex
+
+```{r}
+age_sex_pro <- age %>% 
+  group_by(PopName, kid_sex) %>% 
+  count(age_spawn) %>% 
+  mutate(total = sum(n), freq = n/sum(n))%>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(PopName, age_spawn, kid_sex, final_col) %>% 
+  pivot_wider(names_from = PopName, values_from = final_col) %>% 
+  replace_na(list(CH = "0", FRH = "0", MRH = "0", NH = "0"))
+
+write_csv(age_sex_pro, "../tables/3_age_sex.csv")
+
+age_sex_234 <- age %>% 
+  group_by(PopName, kid_sex) %>% 
+  count(age_spawn) %>% 
+  filter(age_spawn <5) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+
+age_sex_pro <- age %>% 
+  group_by(PopName, kid_sex) %>% 
+  count(age_spawn) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+Kruskal-wallis: age_spawn by sex
+```{r}
+options(digits = 7)
+kruskal.test(age_sex_pro, age_spawn~kid_sex)
+```
+
+
+
+```{r}
+age_sex_gg <- ggplot(age_sex_234)+
+  geom_col(aes(x=PopName, y=freq, fill = as.factor(age_spawn)), 
+           position = position_fill(reverse = TRUE))+
+  scale_fill_manual(values = c("#39a5c2","#7ee76c","#fff995"))+
+  facet_grid(kid_sex~.)+
+  theme_classic()+
+  guides(fill = guide_legend(reverse = TRUE, title="Spawning Age"))+
+  labs(x="Program", y="Proportion")+
+  geom_text(aes(label=total, x=PopName, y=1.1), size = 2) 
+age_sex_gg
+```
+
+# Program Age at Spawning by Cohort and Return Year
+
+## By Cohort (Release) Year
+
+Kids will be grouped by cohort year to determine age structure thru years. Cohort year refers to the year that the kids were released as juveniles (SpawnYear)
+
+
+```{r}
+age_cohort <- age %>% 
+  group_by(PopName, SpawnYear) %>% 
+  count(age_spawn) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+Kruskal-wallis: age_spawn ~ spawn_year
+```{r}
+options(digits = 7)
+kruskal.test(age_cohort, age_spawn~SpawnYear)
+```
+
+Kruskal-wallis: age_spawn by SpawnYear within each program
+
+CH
+```{r}
+kruskal.test(age_cohort %>% filter(PopName == "CH"), age_spawn~SpawnYear)
+```
+
+FRH
+```{r}
+kruskal.test(age_cohort %>% filter(PopName == "FRH"), age_spawn~SpawnYear)
+```
+
+MRH
+```{r}
+kruskal.test(age_cohort %>% filter(PopName == "MRH"), age_spawn~SpawnYear)
+```
+
+NH
+```{r}
+kruskal.test(age_cohort %>% filter(PopName == "NH"), age_spawn~SpawnYear)
+```
+
+## By Return Year
+
+Kids will be grouped by return/kid year to determine age structure thru years. Return year refers to the year that the kids returned to a hatchery to spawn (kid_year)
+
+```{r}
+age_ret <- age %>% 
+  group_by(PopName, kid_year) %>% 
+  count(age_spawn) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+Kruskal-wallis: age_spawn ~ kid_year
+```{r}
+kruskal.test(age_ret, age_spawn~kid_year)
+```
+
+Kruskal-wallis: age_spawn by SpawnYear within each program
+
+CH
+```{r}
+kruskal.test(age_ret %>% filter(PopName == "CH"), age_spawn~kid_year)
+```
+
+FRH
+```{r}
+kruskal.test(age_ret %>% filter(PopName == "FRH"), age_spawn~kid_year)
+```
+
+MRH
+```{r}
+kruskal.test(age_ret %>% filter(PopName == "MRH"), age_spawn~kid_year)
+```
+
+NH
+```{r}
+kruskal.test(age_ret %>% filter(PopName == "NH"), age_spawn~kid_year)
+```
+
+## Figure 
+
+```{r}
+age_yr_fig1 <- age %>% 
+  group_by(PopName, SpawnYear) %>% 
+  count(age_spawn) %>% 
+  filter(age_spawn<5) %>% 
+  mutate(total = sum(n), freq = n/sum(n), type="Cohort Year") %>% 
+  rename("year"="SpawnYear", "hatchery"="PopName") %>% 
+  mutate(year = as.numeric(year))
+
+age_yr_fig2 <- age %>% 
+  group_by(kid_hatchery, kid_year) %>% 
+  count(age_spawn) %>% 
+  filter(age_spawn<5) %>% 
+  mutate(total = sum(n), freq = n/sum(n), type="Return Year") %>% 
+  rename("year"="kid_year", "hatchery"="kid_hatchery") %>% 
+  mutate(year = as.numeric(year))
+
+age_yr_fig <- rbind(age_yr_fig1, age_yr_fig2)
+
+```
+
+
+```{r}
+age_yr_gg <- ggplot(age_yr_fig) +
+  geom_col(aes(year, freq, fill = as.factor(age_spawn)),
+           position = position_fill(reverse = TRUE)) +
+  facet_grid(type ~hatchery) +
+  scale_x_continuous(breaks = seq(2011, 2019, 1))+
+  scale_y_continuous(breaks = seq(0,1,0.25))+
+  guides(fill = guide_legend(reverse = TRUE, title="Spawning Age"))+
+  scale_fill_manual(values = c("#39a5c2","#7ee76c","#fff995"))+
+  theme_classic()+
+  theme(text = element_text(size=10),
+        axis.text.x = element_text(angle=90, hjust=1))+
+  labs(x="Year", y="Frequency")+
+  geom_text(aes(label=total, x=year, y=1.1), angle = 45, size = 1.5)
+
+ggsave(plot=age_yr_gg, file="../figures/Fig2_age.png", width = 15, height = 10, units = "cm", dpi = 800)
+
+age_yr_gg
+
+```
+
+# Program Age at Spawning - binned dates
+
+Now, group spawners by binned spawn date by sex and age. Each program will have spawn dates grouped into sets of 5 dates across all spawn years, then programs will be scaled to 20 binned spawndates to standardize spawn length season. Binning spawn dates will line up dates to show ages by first bin of spawn dates for each hatchery. Julian dates have to be adjusted so that the spawn season dates are sequential chronologically for each season (some of them start in November or December, so need to have these dates first). Day of year (DOY) of 10 will be 11/09 instead of 01/10. 
+
+```{r}
+bins_1 <- age %>%  
+  mutate(new_kid_sg = kid_sg, .after=kid) %>% 
+  separate_rows(new_kid_sg, sep=",") %>% 
+  group_by(kid) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  mutate(new_kid_sg = mdy(as.character(new_kid_sg))) %>% 
+  mutate(kid_ju = yday(new_kid_sg), .after=new_kid_sg) %>% # wanted to check that julian date / day o year same
+  mutate(kid_dayofyear = (strftime(new_kid_sg, format = "%j")), .after=kid_ju) %>% 
+  mutate(kid_DOY = as.numeric(kid_dayofyear)-304) %>% 
+  mutate(kid_DOY = case_when(
+    kid_DOY > 0 ~ kid_DOY,
+    kid_DOY < 0 ~ kid_DOY + 365
+  )) %>% 
+  filter(kid != "M097386") %>% # likely error in spawn date
+  select(kid, ma, pa, kid_DOY, everything())
+
+final_bins <- bins_1 %>%  
+  group_by(PopName) %>% 
+  filter(as.numeric(age_spawn)<5) %>% 
+  mutate(bin5 = cut_interval(kid_DOY, length=5, labels = F)) %>%   
+  mutate(bin_to_days = bin5 * 5) %>% # this part is so that bin to day ratio is there
+  select(kid_DOY, bin5, bin_to_days, everything()) %>% 
+  count(kid_DOY, bin5, kid_sex, age_spawn) %>% 
+  group_by(kid_DOY, kid_sex) %>% 
+  mutate(frac.f = n/sum(n), total.f = sum(n))
+
+
+day_bin <- final_bins %>%  
+  group_by(PopName) %>% 
+  distinct(kid_DOY) %>% 
+  group_by(PopName) %>% 
+  mutate(day_id = row_number(), 
+         day_bin = cut(day_id,20,labels=F))
+
+final_beens <- left_join(final_bins, day_bin, by=c("PopName","kid_DOY")) %>% 
+  group_by(PopName, day_bin, kid_sex) %>% 
+  mutate(freq = n/sum(n), total = sum(n))
+
+bins_gg <- ggplot(final_beens %>% filter(age_spawn <5))+
+  geom_col(aes(x = day_bin, y = freq, fill = as.factor(age_spawn)), position = position_fill(reverse = TRUE))+
+  scale_fill_discrete(limits=c(4,3,2))+
+  facet_grid(kid_sex~PopName)+
+  theme_classic()+
+  scale_fill_manual(values = c("#39a5c2","#7ee76c","#fff995"))+
+  guides(fill = guide_legend(reverse = TRUE, title="Spawning Age"))+
+  labs(x = "Binned Spawn Date", y = "Frequency")+
+  geom_text(aes( x = day_bin, y=1.1, label=total), stat = 'unique', size = 1.2, angle=45)+
+  theme(axis.text.x = element_text(vjust = 0.5))+
+  scale_x_continuous(breaks = seq(5,20,5))
+
+bins_gg
+
+ggsave(plot=bins_gg, file="../figures/Fig3_bins.png", width = 20, height = 10, units = "cm", dpi = 800)
+```
+
+## Spawn season lengths
+
+```{r}
+final_fig3_bin <- bins_1 %>% 
+ filter(as.numeric(age_spawn)<5) %>% 
+  mutate(bin5 = cut_interval(kid_DOY, length = 5, labels = F)) %>%
+  mutate(bin_to_days = bin5 * 5) %>%
+  select(kid_DOY, bin5, bin_to_days, everything()) %>% 
+  count(bin_to_days, PopName) %>% 
+  group_by(bin_to_days, PopName) %>% 
+  mutate(frac = n/sum(n), total = sum(n)) 
+```
+
+```{r}
+fig1add <- ggplot(final_fig3_bin)+
+  geom_area(aes(x = bin_to_days, y = n, fill = as.factor(PopName)))+
+  facet_grid(PopName ~.)+
+  theme_classic()+
+  scale_fill_manual(values =c("#9379AD", "#e4af62", "#b65d2b", "#79ad9f"))+
+  labs(x = "Adjusted Julian Spawn Date", fill = "Hatchery", y = "Number of Returns")+
+  scale_x_continuous(breaks = seq(5,140,5))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+fig1add
+```
+
+```{r}
+ggsave(plot = fig1add, file = "../figures/S1_spwnsn.png", 
+       width = 25, height = 10, units = "cm", dpi = 800)
+```
+
+
+# Mean/Median Spawn Dates by Age and Sex
+
+```{r}
+dy_ntt <- age %>% 
+  separate_rows(kid_sg, sep=",") %>% 
+  mutate(kid_sg = mdy(kid_sg), date = yday(kid_sg), .after=kid_sg) %>%
+  mutate(kid_DOYa = as.numeric(date)-304, .after=kid_sg) %>% 
+  mutate(kid_DOY = case_when(
+    kid_DOYa > 0 ~ kid_DOYa,
+    kid_DOYa < 0 ~ kid_DOYa + 365
+  ), .after=kid_sg) 
+
+dyyy <- dy_ntt%>% 
+  group_by(PopName, age_spawn, date, kid_DOY) %>% 
+  count() %>% 
+  filter(!is.na(kid_DOY))%>% 
+  group_by(PopName, age_spawn)%>%  
+  summarise(median_month_day = median(kid_DOY), mean_month_day = mean(kid_DOY)) %>% 
+  mutate(med_date = as.numeric(median_month_day)-61, mea_date = as.numeric(mean_month_day)-61) %>% 
+  mutate(medi_DOY = case_when(
+    med_date > 0 ~ med_date,
+    med_date <= 0 ~ med_date+365), 
+        mean_DOY = case_when(
+    mea_date > 0 ~ mea_date,
+    mea_date <= 0 ~ mea_date+365
+  )) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(median_date = as.Date(medi_DOY, format = "%j", origin = "01-01"), mean_date = as.Date(mean_DOY, format = "%j", origin = "01-01")) %>% 
+  mutate(median_date_save = paste(str_sub(median_date, 6, 7), "/", str_sub(median_date, 9, 10)), 
+         mean_date_save = paste(str_sub(mean_date, 6, 7), "/", str_sub(mean_date, 9, 10))) %>% 
+  select(PopName, age_spawn, median_date_save, mean_date_save)
+
+write_csv(dyyy, "../tables/S7_meanmedates.csv")
+
+
+ 
+
+dyyy_pop <- dy_ntt%>% 
+  group_by(age_spawn, date, kid_DOY) %>% 
+  count() %>% 
+  filter(!is.na(kid_DOY))%>% 
+  group_by(age_spawn)%>%  
+  summarise(median_month_day = median(kid_DOY), mean_month_day = mean(kid_DOY)) %>% 
+  mutate(med_date = as.numeric(median_month_day)-61, mea_date = as.numeric(mean_month_day)-61) %>% 
+  mutate(medi_DOY = case_when(
+    med_date > 0 ~ med_date,
+    med_date <= 0 ~ med_date+365), 
+        mean_DOY = case_when(
+    mea_date > 0 ~ mea_date,
+    mea_date <= 0 ~ mea_date+365
+  )) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(median_date = as.Date(medi_DOY, format = "%j", origin = "01-01"), mean_date = as.Date(mean_DOY, format = "%j", origin = "01-01")) %>% 
+  mutate(median_date_save = paste(str_sub(median_date, 6, 7), "/", str_sub(median_date, 9, 10)), 
+         mean_date_save = paste(str_sub(mean_date, 6, 7), "/", str_sub(mean_date, 9, 10)))
+
+kruskal.test(dyyy_pop, age_spawn~median_date)
+
+
+```
+
+
+
+# Straying
+
+Finally, we will investigate instances of steelhead returning to an alternate hatchery than their origin to spawn. 
+
+```{r}
+stray <- age %>%
+  mutate(straying = case_when(
+    kid_hatchery == pa_hatchery ~ "no",
+    kid_hatchery != pa_hatchery ~ "stray"
+  ))
+
+
+# supple. table 8
+str_all <- stray %>% 
+  filter(straying == "stray") %>% 
+  group_by(PopName, kid_hatchery, SpawnYear, kid_year) %>% 
+  count(straying, age_spawn) %>% 
+  group_by(straying) %>% 
+  mutate(total = sum(n), freq = n/total)
+write_csv(str_all, "../tables/S8_strayyrs.csv")
+
+# table 4 for MS
+stray_table4 <- stray %>% 
+  filter(age_spawn <5) %>% 
+  group_by(PopName, kid_hatchery) %>% 
+  count(age_spawn) %>% 
+  group_by(PopName) %>% 
+  mutate(total = sum(n), freq = n/total) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(PopName, kid_hatchery, age_spawn, final_col) %>% 
+  pivot_wider(names_from = PopName, values_from = final_col) %>% 
+  replace_na(list(CH = "0", FRH = "0", MRH = "0", NH = "0")) %>% 
+  arrange(kid_hatchery)
+write_csv(stray_table4, "../tables/4_proage.csv")
+
+
+# table 5 for MS
+stray_table5 <- stray %>% 
+  group_by(PopName, kid_hatchery) %>% 
+  count(straying) %>% 
+  group_by(PopName) %>% 
+  mutate(total = sum(n), freq = n/total) %>% 
+  dplyr::mutate_if(is.numeric, round, 3) %>% 
+  mutate(final_col = paste(n, " (", (freq*100), "%)", sep="")) %>% 
+  select(PopName, kid_hatchery, final_col) %>% 
+  pivot_wider(names_from = PopName, values_from = final_col) %>% 
+  replace_na(list(CH = "0", FRH = "0", MRH = "0", NH = "0")) %>% 
+  arrange(kid_hatchery)
+write_csv(stray_table5, "../tables/5_straying.csv")
+
+
+```
+

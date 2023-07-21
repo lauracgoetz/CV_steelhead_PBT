@@ -1,0 +1,215 @@
+---
+title: "3_CVSH: Number of spawnings"
+output: html_notebook
+---
+
+# Overview
+
+Steelhead are able to spawn multiple times in their lifetime - we define iteroparity as spawning in multiple years, and repeat-spawning as spawning more than once within a single spawning season. 
+
+Interested in:
+
+* number of iteroparous / repeat-individuals by program and sex
+* number of iteroparous / repeat-individuals by program and sex over time
+* number of uses for each, number of recorded offspring per use
+
+```{r}
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(lubridate)
+
+clusters <- read_rds("../metadata/clusters.rds")
+meta <- read_rds("../metadata/cvsh_meta.rds")
+holdovers <- read_rds("../metadata/holdovers.rds")
+```
+
+```{r}
+# classify clusters as itero or repeat then bind on pedigree 
+clu_co <- clusters %>% 
+  group_by(year, hatchery) %>% 
+  count(cluster, retained_id)
+
+clu_co_total <- clusters %>% 
+  group_by(hatchery) %>% 
+  count(cluster) #1906 individuals on final clusters list after removing problematic individuals
+
+# some of these individuals have multiple hatcheries
+
+#itero vs repeat
+clu_ty <- clu_co %>% 
+  mutate(type.use = case_when(
+    n == 1 ~ "iteroparous",
+    n > 1 ~ "repeat"
+  )) %>% # bind on holdover column
+  left_join(., holdovers %>% select(NMFS_DNA_ID, holdover), by = c("retained_id"="NMFS_DNA_ID")) %>%
+  left_join(., clusters, by=c("cluster", "hatchery")) %>% 
+  ungroup()
+
+# bind onto metadata, if spawned only once, mark as single
+
+uses <- left_join(meta, clu_ty %>% select(original_id, cluster, type.use, holdover), 
+                  by=c("NMFS_DNA_ID"="original_id")) %>% 
+  replace_na(list(type.use = "once"))
+
+
+```
+
+
+
+# Iteroparity and Repeat-Spawning by Program
+
+## Program by Number of Use
+
+```{r}
+pro_ct <- clusters %>% 
+  count(hatchery) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+
+## Overall
+
+```{r}
+uses.freq.total <- uses %>% # collapse to only counting each cluster/individual once
+  group_by(cluster) %>% 
+  distinct() %>% 
+  group_by(hatchery) %>% 
+  count(type.use) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+options(digits = 7)
+kruskal.test(uses.freq.total, type.use~hatchery)
+```
+
+
+## By sex
+
+```{r}
+sex <- uses %>% 
+  group_by(cluster) %>% 
+  distinct() %>% 
+  group_by(type.use) %>% 
+  count(sex) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+options(digits = 7)
+kruskal.test(sex, sex~type.use)
+```
+
+
+```{r}
+sex <- uses %>% 
+  group_by(cluster) %>% 
+  distinct() %>% 
+  group_by(sex) %>% 
+  count(type.use) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+options(digits = 7)
+kruskal.test(sex, type.use~sex)
+```
+
+## By program and sex
+
+```{r}
+sex_pro <- uses %>% 
+  group_by(cluster) %>% 
+  distinct() %>% 
+  group_by(hatchery, sex) %>% 
+  count(type.use) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+```
+
+
+
+## Summary table
+
+```{r}
+options(digits = 5)
+pro_total <- uses.freq.total %>% 
+  mutate(sex = "total") %>% 
+  select(hatchery, sex, everything())
+uses_table <- rbind(pro_total, sex_pro) %>% 
+  select(type.use, hatchery, everything()) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(values = paste(n, " ", "(","",(as.numeric(freq*100)),"", "%)", sep="")) %>% 
+  select(-total, -freq, -n) %>% 
+  pivot_wider(names_from = hatchery, values_from = values)
+
+write_csv(uses_table, "../tables/2_uses.csv")
+```
+
+
+
+# Iteroparity and Repeat-Spawning by Program and Year
+
+## Overall
+
+```{r}
+options(digits = 7)
+uses.freq.tsyr <- uses %>% 
+  group_by(cluster, year) %>% # reduce every cluster/individual to one count per year
+  distinct() %>%
+  group_by(hatchery, year) %>% 
+  count(type.use) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+
+kruskal.test(uses.freq.tsyr, type.use~year)
+```
+
+Kruskal wallis for each program by year: 
+
+CH
+```{r}
+options(digits = 7)
+kruskal.test(uses.freq.tsyr %>% filter(hatchery == "CH"), type.use~year)
+```
+
+FRH
+```{r}
+options(digits = 7)
+kruskal.test(uses.freq.tsyr %>% filter(hatchery == "FRH"), type.use~year)
+```
+
+MRH
+```{r}
+options(digits = 7)
+kruskal.test(uses.freq.tsyr %>% filter(hatchery == "MRH"), type.use~year)
+```
+
+NH
+```{r}
+options(digits = 7)
+kruskal.test(uses.freq.tsyr %>% filter(hatchery == "NH"), type.use~year)
+```
+
+
+## By program, year, and sex
+
+```{r}
+uses.freq.ssyr <- uses %>% 
+  group_by(cluster) %>% 
+  distinct() %>% 
+  group_by(hatchery, year, sex) %>% 
+  count(type.use) %>% 
+  mutate(total = sum(n), freq = n/sum(n))
+
+```
+
+
+## Summary table
+
+```{r}
+options(digits = 5)
+pro_yr <- uses.freq.tsyr %>% 
+  mutate(sex = "total") %>% 
+  select(hatchery, sex, everything())
+uses_suptable <- rbind(pro_yr, uses.freq.ssyr) %>% 
+  select(type.use, hatchery, everything()) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(values = paste(n, " ", "(","",(as.numeric(freq*100)),"", "%)", sep="")) %>% 
+  select(-total, -freq, -n) %>% 
+  pivot_wider(names_from = year, values_from = values) %>% 
+  arrange(type.use, hatchery) 
+
+write_csv(uses_suptable, "../tables/S4_yruses.csv")
+```
+
