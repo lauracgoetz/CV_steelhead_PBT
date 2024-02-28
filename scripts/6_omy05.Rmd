@@ -229,10 +229,14 @@ omy_sex_gg <- ggplot(omy_sex %>% filter(age_spawn <5))+
   theme_classic()+
   guides(fill = guide_legend(title="Omy05"))+
   labs(x="Program", y="Proportion")+
-  scale_fill_manual(values = c("#959be9","#ace1af", "#f94f4c"))+
-  geom_text(aes(y=(freq)+0.07, label=n, group=Omy05, x=as.factor(age_spawn)), position = position_dodge(width = 1), size = 1) 
+  scale_fill_manual(values = c("#959be9","#ace1af", "#f94f4c"))#+
+  #geom_text(aes(y=(freq)+0.07, label=n, group=Omy05, x=as.factor(age_spawn)), position = position_dodge(width = 1), size = 1) 
 
 ggsave(plot=omy_sex_gg, file="../figures/Fig4_omy5.png", width = 15, height = 10, units = "cm", dpi = 800)
+
+
+ggsave(plot = omy_sex_gg, file = "../final_figures/F5_omy5.pdf", 
+       width = 180, height = 135, units = "mm", dpi = 600)
 
 omy_sex_gg
 ```

@@ -238,6 +238,9 @@ ggsave(plot=age_yr_gg, file="../figures/Fig2_age.png", width = 15, height = 10, 
 
 age_yr_gg
 
+
+ggsave(plot = age_yr_gg, file = "../final_figures/F3_ageyr.pdf", 
+       width = 180, height = 120, units = "mm", dpi = 600)
 ```
 
 # Program Age at Spawning - binned dates
@@ -283,6 +286,7 @@ day_bin <- final_bins %>%
 final_beens <- left_join(final_bins, day_bin, by=c("PopName","kid_DOY"))
 
 supptable_bins <- final_beens %>% 
+  ungroup() %>% 
   select(PopName, day_bin, kid_sex, age_spawn, n) %>% 
   group_by(PopName, day_bin, kid_sex, age_spawn) %>% 
   mutate(count_age = sum(n)) %>% 
@@ -308,9 +312,50 @@ bins_gg <- ggplot(supptable_bins %>% filter(age_spawn <5))+
 bins_gg
 
 ggsave(plot=bins_gg, file="../figures/Fig3_bins.png", width = 20, height = 10, units = "cm", dpi = 800)
+
+
+ggsave(plot = bins_gg, file = "../final_figures/F4_agebn.pdf", 
+       width = 180, height = 90, units = "mm", dpi = 600)
+
 write_csv(supptable_bins, "../tables/Fig3_sample_sizes.csv")
 
 ```
+
+### density plot
+
+```{r}
+
+density_bins <- final_beens %>% 
+  ungroup() %>% 
+  select(PopName, day_bin, kid_sex, age_spawn, n) %>% 
+  group_by(PopName, day_bin, kid_sex, age_spawn) %>% 
+  mutate(count_age = sum(n))%>% 
+  select(-n) %>% 
+  distinct() %>% 
+  group_by(PopName, day_bin, kid_sex) %>% 
+  mutate(count_total = sum(count_age)) %>% 
+  ungroup() %>% 
+  distinct()
+
+
+
+
+density_gg <- ggplot(supptable_bins %>% filter(age_spawn <5))+
+  geom_density(aes(x = day_bin, y=..density.., stat="density", fill = as.factor(age_spawn)), alpha=0.7)+
+  scale_fill_discrete(limits=c(4,3,2))+
+  facet_grid(kid_sex~PopName)+
+  theme_classic()+
+  scale_fill_manual(values = c("#39a5c2","#7ee76c","#fff995"))+
+  guides(fill = guide_legend(reverse = TRUE, title="Spawning Age"))+
+  labs(x = "Binned Spawn Date", y = "Frequency")+
+  theme(axis.text.x = element_text(vjust = 0.5))+
+  scale_x_continuous(breaks = seq(5,20,5))
+
+density_gg
+
+ggsave(plot=density_gg, file="../figures/Fig3_density.png", width = 20, height = 10, units = "cm", dpi = 800)
+```
+
 
 
 ## Spawn season lengths
@@ -341,6 +386,10 @@ fig1add
 ```{r}
 ggsave(plot = fig1add, file = "../figures/S1_spwnsn.png", 
        width = 25, height = 10, units = "cm", dpi = 800)
+
+
+ggsave(plot = fig1add, file = "../final_figures/S1_spwnsn.pdf", 
+       width = 180, height = 135, units = "mm", dpi = 600)
 ```
 
 

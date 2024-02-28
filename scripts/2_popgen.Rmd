@@ -360,7 +360,7 @@ write_csv(hehor, "../tables/S1_He_Ho_rem.csv")
 * by program across year
 * by year in program
 
-This program takes way too long on all samples (same with STRUCTURE), so time to subset a random 300 individuals.
+This program takes way too long on all samples (same with STRUCTURE), so time to subset a random set of individuals.
 
 ```{r}
 set.seed(5)
@@ -564,6 +564,10 @@ fsty_gg
 ```{r}
 ggsave(plot = fsty_gg, file = "../figures/S5_fstb.png", 
        width = 15, height = 10, units = "cm", dpi = 800)
+
+
+ggsave(plot = fsty_gg, file = "../final_figures/S4_fstb.pdf", 
+       width = 180, height = 120, units = "mm", dpi = 600)
 ```
 
 
@@ -861,5 +865,9 @@ pca_1rgg
 ggsave(plot = pca_1rgg, file = "../figures/S4_PCA2.png", 
        #bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 800)
+
+
+ggsave(plot = pca_1rgg, file = "../final_figures/S3_PCA.pdf", 
+       width = 180, height = 135, units = "mm", dpi = 600)
 ```
 

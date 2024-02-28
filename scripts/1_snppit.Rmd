@@ -303,6 +303,9 @@ ggsave(plot = msa, file = "../figures/S2_msa.png",
        #bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 800)
 
+ggsave(plot = msa, file = "../final_figures/S2_msa.pdf", 
+       width = 180, height = 135, units = "mm", dpi = 600)
+
 # get the clusters of matching genotypes each indvidual belongs to
 for_real <- find_matching_samples(genos, min_frac_matching = 0.95, return_clusters = TRUE)
 
