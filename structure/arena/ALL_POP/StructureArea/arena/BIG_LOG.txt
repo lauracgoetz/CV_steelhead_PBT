@@ -1,0 +1,6 @@
+Starting Rep  1  of K= 2 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 16:30:27 PDT 2023
+Done with Rep  1  with K= 2 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 17:02:20 PDT 2023
+Starting Rep  1  of K= 3 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 16:30:27 PDT 2023
+Done with Rep  1  with K= 3 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 17:05:51 PDT 2023
+Starting Rep  1  of K= 4 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 16:30:27 PDT 2023
+Done with Rep  1  with K= 4 for data set genos_slg_pipe.txt_dat001 at Wed Jul 12 17:09:28 PDT 2023

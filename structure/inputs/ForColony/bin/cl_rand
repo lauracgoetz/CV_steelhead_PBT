@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# this is a little script that calls R to replace the random
+# number functions we needed from my C program cl_rand, because those
+# no longer work in 64-bit.
+
+function usage {
+      echo Syntax:
+      echo "  $(basename $0) -u (or -r) num lo hi"
+      echo
+      echo "      num is the number of uniform random variates"
+      echo "      lo is the lo end of the range to draw from"
+      echo "      hi is the hi end of the range to draw from"
+      echo
+      echo " -u gives you uniformly sampled integers. -r gives you reals."
+      echo
+}
+
+if [ $# -eq 0 ]; then
+    usage;
+    exit 1;
+fi;
+
+while getopts ":hur" opt; do
+    case $opt in
+	h    )
+	    usage
+	    exit 1
+	    ;;
+	u    )  what=u 
+	    ;;
+	r    )  what=r 
+	    ;;
+	\?   )
+	    usage
+	    exit  1
+	    ;;
+    esac
+done
+
+shift $((OPTIND-1));
+
+
+if [ $what = u ]; then
+  num=$1
+  lo=$2
+  hi=$3
+  
+  Rscript --vanilla -e "x <- sample($lo:$hi, size = $num); cat(x, sep = ' '); cat('\n');"
+  exit 0;
+fi
+
+
+if [ $what = r ]; then
+  num=$1
+  lo=$2
+  hi=$3
+  
+  Rscript --vanilla -e "x <- runif(n = $num, min = $lo, max = $hi); cat(x, sep = ' '); cat('\n');"
+  exit 0;
+fi
+
+
+echo "Only options u and r are available" > /dev/stderr;
+exit 1
+
